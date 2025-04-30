@@ -14,9 +14,9 @@
 
 use core::pin::Pin;
 use core::task::{Context, Poll};
+use std::future::poll_fn;
 use futures_core::ready;
 use std::io::{IoSlice, Read, Write};
-use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_util::codec::Framed;
@@ -77,20 +77,26 @@ impl AsyncDevice {
 
     /// Recv a packet from tun device
     pub async fn recv(&self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let guard = self.inner.readable().await?;
-        guard
-            .get_ref()
-            .async_io(Interest::READABLE, |inner| inner.recv(buf))
-            .await
+        loop {
+            let mut guard = poll_fn(|cx| self.inner.poll_read_ready(cx)).await?;
+
+            match guard.try_io(|inner| inner.get_ref().recv(buf)) {
+                Ok(result) => return result,
+                Err(_would_block) => continue,
+            }
+        }
     }
 
     /// Send a packet to tun device
     pub async fn send(&self, buf: &[u8]) -> std::io::Result<usize> {
-        let guard = self.inner.writable().await?;
-        guard
-            .get_ref()
-            .async_io(Interest::WRITABLE, |inner| inner.send(buf))
-            .await
+        loop {
+            let mut guard = poll_fn(|cx| self.inner.poll_write_ready(cx)).await?;
+
+            match guard.try_io(|inner| inner.get_ref().send(buf)) {
+                Ok(result) => return result,
+                Err(_would_block) => continue,
+            }
+        }
     }
 }
 
